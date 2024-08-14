@@ -119,13 +119,13 @@ impl EventHandler for Handler {
             return;
         }
 
-        let voice = voice_allocator.get_or_insert(new_message.author.id.get());
-        let tts_path = match dectalk::tts(
-            &process_message(&new_message.content),
-            if is_owner { &'p' } else { &voice },
-        )
-        .await
-        {
+        let voice = if is_owner {
+            &'p'
+        } else {
+            &voice_allocator.get_or_insert(new_message.author.id.get())
+        };
+
+        let tts_path = match dectalk::tts(&process_message(&new_message.content), voice).await {
             Ok(tts_path) => tts_path,
             Err(e) => {
                 eprintln!("Failed to generate TTS: {:?}", e);
