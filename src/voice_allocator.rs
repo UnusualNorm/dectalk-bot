@@ -16,6 +16,10 @@ impl VoiceAllocator {
         }
     }
 
+    pub fn set_voice(&mut self, user_id: u64, voice: char) {
+        self.user_voices.insert(user_id, voice);
+    }
+
     pub fn get_or_insert(&mut self, user_id: u64) -> char {
         if let Some(&voice) = self.user_voices.get(&user_id) {
             return voice;

@@ -45,6 +45,11 @@ impl EventHandler for Handler {
             return;
         }
 
+        let content = process_message(&new_message.content);
+        if content.is_empty() {
+            return;
+        }
+
         let guild_id = match new_message.guild_id {
             Some(guild_id) => guild_id,
             None => {
@@ -119,13 +124,16 @@ impl EventHandler for Handler {
             return;
         }
 
-        let voice = if is_owner {
-            &'p'
-        } else {
-            &voice_allocator.get_or_insert(new_message.author.id.get())
-        };
+        if is_owner {
+            voice_allocator.set_voice(new_message.author.id.get(), 'p');
+        }
 
-        let tts_path = match dectalk::tts(&process_message(&new_message.content), voice).await {
+        let tts_path = match dectalk::tts(
+            &content,
+            &voice_allocator.get_or_insert(new_message.author.id.get()),
+        )
+        .await
+        {
             Ok(tts_path) => tts_path,
             Err(e) => {
                 eprintln!("Failed to generate TTS: {:?}", e);
