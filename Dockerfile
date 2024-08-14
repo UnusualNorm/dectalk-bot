@@ -9,8 +9,7 @@ RUN apt-get update && \
   unzip \
   git \
   && apt-get clean
-RUN git clone https://github.com/dectalk/dectalk.git /dectalk && \
-  git config --global --add safe.directory /dectalk
+RUN git clone https://github.com/dectalk/dectalk.git /dectalk
 WORKDIR /dectalk/src
 RUN autoreconf -si && \
   ./configure && \
@@ -24,7 +23,7 @@ COPY . .
 RUN cargo install --path .
 
 
-FROM debian:bookworm-slim
+FROM debian:stable-slim
 RUN apt-get update && apt-get install -y \
   libpulse0 \
   libasound2 \
