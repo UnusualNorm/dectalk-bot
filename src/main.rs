@@ -41,7 +41,7 @@ impl EventHandler for Handler {
                 .parse::<u64>()
                 .expect("Expected the owner to be a u64");
 
-        if !is_owner && new_message.content.len() > 128 {
+        if !is_owner && new_message.content.len() > 256 {
             return;
         }
 
