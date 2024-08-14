@@ -27,6 +27,7 @@ RUN cargo install --path .
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
   libpulse0 \
+  libasound2 \
   && apt-get clean
 COPY --from=builder /usr/local/cargo/bin/dectalk /usr/local/bin/dectalk
 COPY --from=dectalk-builder /dectalk/dist /dectalk
