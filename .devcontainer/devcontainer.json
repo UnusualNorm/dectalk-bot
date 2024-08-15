@@ -2,7 +2,7 @@
 	"image": "mcr.microsoft.com/devcontainers/rust:1-1-bookworm",
 	"features": {
 		"ghcr.io/akhildevelops/devcontainer-features/apt:0": {
-			"PACKAGES": "cmake"
+			"PACKAGES": "cmake libpulse0"
 		},
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
 	}

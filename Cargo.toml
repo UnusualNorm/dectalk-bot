@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 dotenv = "0.15.0"
 regex = "1.10.6"
+serde_json = "1.0.124"
 serenity = { version = "0.12.2", features = ["client", "voice"] }
 songbird = "0.4.3"
 symphonia = { version = "0.5.4", features = ["wav"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 tokio = { version = "1.39.2", features = ["full"] }
 uuid = "1.10.0"

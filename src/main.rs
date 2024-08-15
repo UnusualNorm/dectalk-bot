@@ -1,8 +1,15 @@
-use std::{collections::HashMap, env, io::Cursor, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    error::Error,
+    io::Cursor,
+    sync::Arc,
+};
 
+use dectalk::PAUL_VOICE;
 use regex::Regex;
 use serenity::{
-    all::{GuildId, VoiceState},
+    all::{GuildId, UserId, VoiceState},
     async_trait,
     client::{Client, Context, EventHandler},
     model::{channel::Message, gateway::Ready},
@@ -15,15 +22,21 @@ use tokio::{
     signal,
     sync::Mutex,
 };
-use voice_allocator::VoiceAllocator;
+use voice_manager::VoiceManager;
 
 mod dectalk;
-mod voice_allocator;
+mod voice_manager;
 
-struct VoiceAllocatorKey;
+struct VoiceManagerKey;
 
-impl TypeMapKey for VoiceAllocatorKey {
-    type Value = Arc<Mutex<HashMap<GuildId, VoiceAllocator>>>;
+impl TypeMapKey for VoiceManagerKey {
+    type Value = Arc<VoiceManager>;
+}
+
+struct GuildUsersKey;
+
+impl TypeMapKey for GuildUsersKey {
+    type Value = Arc<Mutex<HashMap<GuildId, HashSet<UserId>>>>;
 }
 
 struct Handler;
@@ -35,21 +48,7 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, new_message: Message) {
-        let is_owner = new_message.author.id.get()
-            == env::var("DISCORD_OWNER")
-                .expect("Expected a owner in the environment")
-                .parse::<u64>()
-                .expect("Expected the owner to be a u64");
-
-        if !is_owner && new_message.content.len() > 256 {
-            return;
-        }
-
-        let content = process_message(&new_message.content);
-        if content.is_empty() {
-            return;
-        }
-
+        let author_id = new_message.author.id;
         let guild_id = match new_message.guild_id {
             Some(guild_id) => guild_id,
             None => {
@@ -57,6 +56,38 @@ impl EventHandler for Handler {
                 return;
             }
         };
+
+        let is_owner = author_id.get()
+            == env::var("DISCORD_OWNER")
+                .expect("Expected a owner in the environment")
+                .parse::<u64>()
+                .expect("Expected the owner to be a u64");
+
+        let voice_manager = match ctx.data.read().await.get::<VoiceManagerKey>() {
+            Some(voice_manager) => voice_manager.clone(),
+            None => {
+                eprintln!("Failed to get voice manager");
+                return;
+            }
+        };
+
+        let requested_roll = get_requested_roll(&new_message.content);
+        if let Some(roll) = requested_roll {
+            println!("Setting roll for {}: {}", author_id, roll);
+            if let Err(e) = voice_manager.set_roll(author_id.get(), roll).await {
+                eprintln!("Failed to set roll: {:?}", e);
+                return;
+            }
+        }
+
+        if !is_owner && new_message.content.len() > 256 {
+            return;
+        }
+
+        let content = remove_requested_roll(&process_message(&new_message.content));
+        if content.is_empty() {
+            return;
+        }
 
         let user_channel_id = {
             let guild = match new_message.guild(&ctx.cache) {
@@ -67,7 +98,7 @@ impl EventHandler for Handler {
                 }
             };
 
-            let voice_states = match guild.voice_states.get(&new_message.author.id) {
+            let voice_states = match guild.voice_states.get(&author_id) {
                 Some(voice_states) => voice_states,
                 None => {
                     eprintln!("Failed to get voice states");
@@ -89,30 +120,13 @@ impl EventHandler for Handler {
             return;
         }
 
+        println!("Found valid message from {}", author_id);
+
         let manager = match songbird::get(&ctx).await {
             Some(manager) => manager,
             None => {
                 eprintln!("Failed to get songbird manager");
                 return;
-            }
-        };
-
-        let voice_allocator = match ctx.data.read().await.get::<VoiceAllocatorKey>() {
-            Some(voice_allocator) => voice_allocator.clone(),
-            None => {
-                eprintln!("Failed to get voice allocator");
-                return;
-            }
-        };
-        let mut voice_allocators = voice_allocator.lock().await;
-
-        let voice_allocator = match voice_allocators.get_mut(&guild_id) {
-            Some(voice_allocator) => voice_allocator,
-            None => {
-                let voice_allocator =
-                    VoiceAllocator::new(vec!['p', 'b', 'h', 'u', 'f', 'w', 'd', 'r', 'k']);
-                voice_allocators.insert(guild_id, voice_allocator);
-                voice_allocators.get_mut(&guild_id).unwrap()
             }
         };
 
@@ -124,22 +138,15 @@ impl EventHandler for Handler {
             return;
         }
 
-        if is_owner {
-            voice_allocator.set_voice(new_message.author.id.get(), 'p');
-        }
-
-        let tts_path = match dectalk::tts(
-            &content,
-            &voice_allocator.get_or_insert(new_message.author.id.get()),
-        )
-        .await
-        {
-            Ok(tts_path) => tts_path,
-            Err(e) => {
-                eprintln!("Failed to generate TTS: {:?}", e);
-                return;
-            }
-        };
+        let voice = voice_manager.get_voice(author_id.get()).await;
+        let tts_path =
+            match dectalk::tts(&content, if is_owner { &PAUL_VOICE } else { &voice }).await {
+                Ok(tts_path) => tts_path,
+                Err(e) => {
+                    eprintln!("Failed to generate TTS: {:?}", e);
+                    return;
+                }
+            };
 
         let mut tts_file = match File::open(&tts_path).await {
             Ok(tts_file) => tts_file,
@@ -173,6 +180,19 @@ impl EventHandler for Handler {
             return;
         }
 
+        let guild_users = match ctx.data.read().await.get::<GuildUsersKey>() {
+            Some(guild_users) => guild_users.clone(),
+            None => {
+                eprintln!("Failed to get guild users");
+                return;
+            }
+        };
+        let mut guild_users = guild_users.lock().await;
+        guild_users
+            .entry(guild_id)
+            .or_insert_with(HashSet::new)
+            .insert(author_id);
+
         handler.play_input(Input::from(tts_bytes));
     }
 
@@ -185,28 +205,27 @@ impl EventHandler for Handler {
             }
         };
 
-        let voice_allocators = match ctx.data.read().await.get::<VoiceAllocatorKey>() {
-            Some(voice_allocator) => voice_allocator.clone(),
+        let guild_users = match ctx.data.read().await.get::<GuildUsersKey>() {
+            Some(guild_users) => guild_users.clone(),
             None => {
-                eprintln!("Failed to get voice allocator");
+                eprintln!("Failed to get guild users");
                 return;
             }
         };
-        let mut voice_allocators = voice_allocators.lock().await;
-
-        let voice_allocator = match voice_allocators.get_mut(&guild_id) {
-            Some(voice_allocator) => voice_allocator,
-            None => {
-                eprintln!("Failed to get voice allocator");
-                return;
-            }
-        };
+        let mut guild_users = guild_users.lock().await;
 
         if new.channel_id.is_none() {
-            voice_allocator.remove(new.user_id.get());
+            guild_users
+                .entry(guild_id)
+                .or_insert_with(HashSet::new)
+                .remove(&new.user_id);
         }
 
-        if voice_allocator.get_users().is_empty() {
+        if guild_users
+            .entry(guild_id)
+            .or_insert_with(HashSet::new)
+            .is_empty()
+        {
             let manager = match songbird::get(&ctx).await {
                 Some(manager) => manager,
                 None => {
@@ -232,18 +251,27 @@ impl EventHandler for Handler {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
 
-    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-    let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
+    let voice_manager = VoiceManager::new();
+    match voice_manager.load_rolls().await {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Failed to load rolls: {:?}", e);
+        }
+    }
 
-    let mut client = Client::builder(&token, intents)
-        .type_map_insert::<VoiceAllocatorKey>(Arc::new(Mutex::new(HashMap::new())))
-        .event_handler(Handler)
-        .register_songbird()
-        .await
-        .expect("Err creating client");
+    let mut client = Client::builder(
+        &env::var("DISCORD_TOKEN")?,
+        GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT,
+    )
+    .type_map_insert::<VoiceManagerKey>(Arc::new(voice_manager))
+    .type_map_insert::<GuildUsersKey>(Arc::new(Mutex::new(HashMap::new())))
+    .event_handler(Handler)
+    .register_songbird()
+    .await
+    .expect("Err creating client");
 
     tokio::spawn(async move {
         let _ = client
@@ -254,6 +282,7 @@ async fn main() {
 
     let _signal_err = signal::ctrl_c().await;
     println!("Received Ctrl-C, shutting down.");
+    Ok(())
 }
 
 async fn get_wav_duration(wav_bytes: &[u8]) -> Option<f64> {
@@ -304,6 +333,18 @@ async fn get_wav_duration(wav_bytes: &[u8]) -> Option<f64> {
     let duration = num_samples / sample_rate as f64;
 
     Some(duration)
+}
+
+fn get_requested_roll(content: &str) -> Option<u64> {
+    let re = Regex::new(r"\[:roll\s*(\d+)\s*\]").unwrap();
+    let caps = re.captures(content)?;
+    let roll = caps.get(1)?.as_str().parse::<u64>().ok()?;
+    Some(roll)
+}
+
+fn remove_requested_roll(content: &str) -> String {
+    let re = Regex::new(r"\[:roll\s*\d+\s*\]").unwrap();
+    re.replace_all(content, "").to_string()
 }
 
 fn process_message(text: &str) -> String {

@@ -30,4 +30,5 @@ RUN apt-get update && apt-get install -y \
   && apt-get clean
 COPY --from=builder /usr/local/cargo/bin/dectalk /usr/local/bin/dectalk
 COPY --from=dectalk-builder /dectalk/dist /dectalk
+VOLUME /data
 CMD ["dectalk"]

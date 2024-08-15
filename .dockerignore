@@ -1,6 +1,7 @@
 /.devcontainer
 /.git
 /.github
+/data
 /dectalk
 /target
 /.dockerignore
@@ -8,3 +9,4 @@
 /.gitignore
 /docker-compose.yml
 /Dockerfile
+/README.md
