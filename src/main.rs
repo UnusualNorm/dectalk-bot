@@ -15,7 +15,7 @@ use serenity::{
     model::{channel::Message, gateway::Ready},
     prelude::{GatewayIntents, TypeMapKey},
 };
-use songbird::{input::Input, SerenityInit};
+use songbird::{input::Input, tracks::Track, SerenityInit};
 use tokio::{
     fs::{self, File},
     io::AsyncReadExt,
@@ -187,13 +187,22 @@ impl EventHandler for Handler {
                 return;
             }
         };
+
+        let normalized_tts_bytes = match normalize_wav_volume(&tts_bytes) {
+            Ok(normalized_tts_bytes) => normalized_tts_bytes,
+            Err(e) => {
+                eprintln!("Failed to normalize TTS volume: {:?}", e);
+                return;
+            }
+        };
+
         let mut guild_users = guild_users.lock().await;
         guild_users
             .entry(guild_id)
             .or_insert_with(HashSet::new)
             .insert(author_id);
 
-        handler.play_input(Input::from(tts_bytes));
+        handler.play(Track::from(Input::from(normalized_tts_bytes)).volume(0.25));
     }
 
     async fn voice_state_update(&self, ctx: Context, _old: Option<VoiceState>, new: VoiceState) {
@@ -350,7 +359,7 @@ fn remove_requested_roll(content: &str) -> String {
 fn process_message(text: &str) -> String {
     let text = remove_links(text);
     let text = replace_discord_emojis(&text);
-    text
+    text.trim().to_string()
 }
 
 fn remove_links(text: &str) -> String {
@@ -368,4 +377,30 @@ fn replace_discord_emojis(text: &str) -> String {
     });
 
     result.to_string()
+}
+
+fn normalize_wav_volume(wav_file: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut reader = hound::WavReader::new(Cursor::new(wav_file))?;
+    let spec = reader.spec();
+    let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap_or(0)).collect();
+    let max_sample = samples.iter().cloned().fold(0, i16::max);
+    let min_sample = samples.iter().cloned().fold(0, i16::min);
+    let max_amplitude = i16::max_value();
+    let min_amplitude = i16::min_value();
+    let mut normalized_samples = Vec::with_capacity(samples.len());
+    for sample in samples {
+        let normalized_sample = if sample > 0 {
+            sample as f64 / max_sample as f64 * max_amplitude as f64
+        } else {
+            sample as f64 / min_sample as f64 * min_amplitude as f64
+        };
+        normalized_samples.push(normalized_sample as i16);
+    }
+    let mut buf = Vec::new();
+    let mut writer = hound::WavWriter::new(Cursor::new(&mut buf), spec)?;
+    for sample in normalized_samples {
+        writer.write_sample(sample)?;
+    }
+    writer.finalize()?;
+    Ok(buf)
 }

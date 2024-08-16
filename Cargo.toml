@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 dotenv = "0.15.0"
+hound = "3.5.1"
 regex = "1.10.6"
 serde_json = "1.0.124"
 serenity = { version = "0.12.2", features = ["client", "voice"] }
